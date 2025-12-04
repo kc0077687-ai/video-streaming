@@ -1,7 +1,7 @@
 """
 Admin API routes with HLS processing support
 """
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from datetime import datetime,timezone
 from typing import Optional
 from bson import ObjectId
@@ -19,7 +19,9 @@ from db_clients import db, minio_client
 from models import CourseCreate, CourseResponse, ChapterCreate, ChapterResponse
 from helpers import serialize_doc, generate_presigned_url
 from config import settings
-from tasks import process_video_to_hls
+
+from tasks import process_video_to_hls_task
+
 
 from concurrent.futures import ThreadPoolExecutor
 executor = ThreadPoolExecutor(max_workers=5)
@@ -149,7 +151,7 @@ async def upload_file_stream(bucket_name: str, object_name: str,
                              upload_file: UploadFile, minio_client: Minio):
 
     loop = asyncio.get_running_loop()
-    chunk_size = 5 * 1024 * 1024  # 5MB chunks
+    chunk_size = 5 * 1024 * 1024  
 
     async def async_reader():
         """Async generator reading upload file in chunks."""
@@ -218,7 +220,7 @@ async def upload_file_stream(bucket_name: str, object_name: str,
 
 @admin_router.post("/videos/upload")
 async def upload_video_with_hls(
-    background_tasks: BackgroundTasks,
+    
     chapter_id: str = Form(...),
     title: str = Form(...),
     description: Optional[str] = Form(None),
@@ -294,13 +296,16 @@ async def upload_video_with_hls(
     result = await db.videos.insert_one(video_doc)
     video_id = str(result.inserted_id)
     
+    # if enable_hls:
+    #     background_tasks.add_task(
+    #         process_video_to_hls,
+    #         video_id,
+    #         video_object_name
+    #     )
     if enable_hls:
-        background_tasks.add_task(
-            process_video_to_hls,
-            video_id,
-            video_object_name
-        )
-    
+        process_video_to_hls_task.delay(video_id, video_object_name)
+
+
     return {
         "id": video_id,
         "message": "Video uploaded successfully. HLS processing started." if enable_hls else "Video uploaded successfully.",
