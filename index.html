@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LMS - with HLS Streaming</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- HLS.js for adaptive streaming -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .fade-in { animation: fadeIn 0.5s ease-out; }
+        .video-card:hover { transform: translateY(-5px); }
+        .video-card { transition: all 0.3s ease; }
+        .progress-bar-fill { transition: width 0.3s ease; }
+
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        
+        .quality-selector {
+            position: absolute;
+            bottom: 60px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 min-h-screen">
+    <div id="app" class="container mx-auto px-4 py-8 max-w-7xl"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000';
+        const USER_ID = 'demo_user_' + Math.random().toString(36).substr(2, 9);
+        
+        let currentView = 'courses';
+        let currentCourse = null;
+        let currentVideo = null;
+        let videoElement = null;
+        let hls = null;
+        let progressInterval = null;
+
+        // SVG Icons (same as before)
+        const icons = {
+            book: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>`,
+            play: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>`,
+            clock: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>`,
+            check: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`,
+            arrowLeft: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>`,
+            user: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>`,
+            youtube: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>`,
+            upload: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>`,
+            hd: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="10" rx="2"></rect><text x="12" y="16" text-anchor="middle" font-size="10" fill="currentColor">HLS</text></svg>`
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadCourses();
+        });
+
+        window.addEventListener('beforeunload', () => {
+            if (videoElement && currentVideo) {
+                saveProgress(Math.floor(videoElement.currentTime), videoElement.duration);
+            }
+            if (hls) {
+                hls.destroy();
+            }
+        });
+
+        // Initialize HLS player
+        function initHLSPlayer(videoEl, hlsUrl, savedProgress = 0) {
+            if (Hls.isSupported()) {
+                hls = new Hls({
+                    debug: false,
+                    enableWorker: true,
+                    lowLatencyMode: true,
+                    backBufferLength: 90
+                });
+                
+                hls.loadSource(hlsUrl);
+                hls.attachMedia(videoEl);
+                
+                hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    console.log('✅ HLS manifest loaded');
+                    console.log(`📊 Available qualities: ${hls.levels.map(l => l.height + 'p').join(', ')}`);
+                    
+                    // Resume from saved position
+                    if (savedProgress > 0) {
+                        videoEl.currentTime = savedProgress;
+                        console.log(`⏩ Resuming from ${savedProgress} seconds`);
+                    }
+                    
+                    videoEl.play().catch(e => console.log('Autoplay prevented:', e));
+                });
+                
+                hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+                    console.log(`📹 Quality switched to: ${hls.levels[data.level].height}p`);
+                });
+                
+                hls.on(Hls.Events.ERROR, (event, data) => {
+                    if (data.fatal) {
+                        console.error('❌ HLS Fatal Error:', data);
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                hls.destroy();
+                                break;
+                        }
+                    }
+                });
+                
+            } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS support (Safari)
+                videoEl.src = hlsUrl;
+                videoEl.addEventListener('loadedmetadata', () => {
+                    if (savedProgress > 0) {
+                        videoEl.currentTime = savedProgress;
+                    }
+                    videoEl.play();
+                });
+            }
+        }
+
+        async function loadCourses() {
+            showLoading();
+            try {
+                const response = await fetch(`${API_BASE}/user/courses`);
+                const courses = await response.json();
+                renderCourses(courses);
+            } catch (error) {
+                showError('Failed to load courses. Make sure the API is running.');
+            }
+        }
+
+        async function loadChapters(courseId) {
+            if (progressInterval) {
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+            
+            currentCourse = courseId;
+            currentView = 'chapters';
+            showLoading();
+            try {
+                const response = await fetch(`${API_BASE}/user/courses/${courseId}/chapters?user_id=${USER_ID}`);
+                const chapters = await response.json();
+                renderChapters(chapters);
+            } catch (error) {
+                showError('Failed to load chapters');
+            }
+        }
+
+        async function playVideo(videoId) {
+            currentVideo = videoId;
+            currentView = 'player';
+            showLoading();
+            try {
+                const response = await fetch(`${API_BASE}/user/videos/${videoId}/stream?user_id=${USER_ID}`);
+                const videoData = await response.json();
+                
+                // Load saved progress
+               if (videoData.video_type === 'hls') {
+                    videoElement = document.getElementById('videoPlayer');
+                    initHLSPlayer(videoElement, videoData.hls_url, videoData.savedProgress || 0);
+                }
+                
+                renderPlayer(videoData);
+            } catch (error) {
+                showError('Failed to load video');
+            }
+        }
+
+        async function loadSavedProgressData(videoId) {
+            try {
+                const response = await fetch(`${API_BASE}/user/progress/${USER_ID}`);
+                const allProgress = await response.json();
+                return allProgress.find(p => p.video_id === videoId);
+            } catch (error) {
+                return null;
+            }
+        }
+
+        async function saveProgress(progressSeconds, duration) {
+            if (!currentVideo) return;
+            
+            const completed = duration && progressSeconds >= duration * 0.95;
+            console.log(`Saving progress: ${progressSeconds}s`);
+            
+            try {
+                await fetch(`${API_BASE}/user/progress`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: USER_ID,
+                        video_id: currentVideo,
+                        progress_seconds: Math.floor(progressSeconds),
+                        completed: completed
+                    })
+                });
+            } catch (error) {
+                console.error('Failed to save progress:', error);
+            }
+        }
+
+        function trackProgress() {
+            if (!videoElement || !currentVideo) return;
+            const currentTime = Math.floor(videoElement.currentTime);
+            if (currentTime % 5 === 0) {
+                saveProgress(currentTime, videoElement.duration);
+            }
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds) return 'N/A';
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins}m ${secs}s`;
+        }
+
+        function getYouTubeEmbedUrl(url, startTime = 0) {
+            const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/);
+            const videoId = match ? match[1] : '';
+            return `https://www.youtube.com/embed/${videoId}?autoplay=1&start=${startTime}`;
+        }
+
+        function renderCourses(courses) {
+            // Same as before - courses grid
+            const html = `
+                <div class="fade-in">
+                    <div class="text-center mb-12">
+                        <h1 class="text-5xl font-bold text-gray-800 mb-3">📚 Learning Management System</h1>
+                        <p class="text-xl text-gray-600">Adaptive HLS Streaming • Multi-Quality Playback</p>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        ${courses.map(course => `
+                            <div onclick="loadChapters('${course.id}')" 
+                                 class="video-card bg-white rounded-xl shadow-lg hover:shadow-2xl cursor-pointer overflow-hidden">
+                                <div class="bg-gradient-to-r from-blue-500 to-purple-600 h-40 flex items-center justify-center">
+                                    <div class="text-white w-20 h-20">${icons.book}</div>
+                                </div>
+                                <div class="p-6">
+                                    <h3 class="text-2xl font-bold text-gray-800 mb-3">${course.title}</h3>
+                                    <p class="text-gray-600 mb-4">${course.description || ''}</p>
+                                    <div class="flex items-center justify-between text-sm">
+                                        <span class="flex items-center gap-2">
+                                            <span class="w-5 h-5">${icons.user}</span>
+                                            ${course.instructor || 'Instructor'}
+                                        </span>
+                                        <span class="bg-blue-100 text-blue-700 px-3 py-1 rounded-full font-semibold">
+                                            ${course.chapter_count} chapters
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+            document.getElementById('app').innerHTML = html;
+        }
+
+        function renderChapters(chapters) {
+            // Similar to before but with HLS badge
+            const html = `
+                <div class="fade-in">
+                    <button onclick="loadCourses()" class="flex items-center gap-2 px-6 py-3 bg-gray-200 hover:bg-gray-300 rounded-lg mb-6">
+                        <span class="w-5 h-5">${icons.arrowLeft}</span> Back
+                    </button>
+                    <h1 class="text-4xl font-bold text-gray-800 mb-8">Course Content</h1>
+                    <div class="space-y-6">
+                        ${chapters.map((chapter, i) => `
+                            <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                                <div class="bg-gradient-to-r from-indigo-500 to-blue-600 p-5">
+                                    <h2 class="text-2xl font-bold text-white flex items-center gap-3">
+                                        <span class="bg-white text-indigo-600 w-10 h-10 rounded-full flex items-center justify-center">${i+1}</span>
+                                        ${chapter.title}
+                                    </h2>
+                                </div>
+                                <div class="p-5 space-y-4">
+                                    ${chapter.videos.map((video, vi) => {
+                                        const progress = video.user_progress?.progress_seconds || 0;
+                                        const duration = video.duration || 0;
+                                        const progressPercent = duration > 0 ? (progress / duration) * 100 : 0;
+                                        
+                                        let badge = '';
+                                        if (video.video_type === 'hls') {
+                                            badge = `<span class="bg-purple-600 text-white text-xs px-2 py-1 rounded-full flex items-center gap-1"><span class="w-3 h-3">${icons.hd}</span>HLS</span>`;
+                                        } else if (video.video_type === 'youtube') {
+                                            badge = `<span class="bg-red-600 text-white text-xs px-2 py-1 rounded-full flex items-center gap-1"><span class="w-3 h-3">${icons.youtube}</span>YT</span>`;
+                                        }
+                                        
+                                        return `
+                                            <div onclick="playVideo('${video.id}')" 
+                                                 class="flex gap-4 p-4 bg-gray-50 hover:bg-gray-100 rounded-lg cursor-pointer">
+                                                <div class="relative flex-shrink-0">
+                                                    ${video.thumbnail_url ? 
+                                                        `<img src="${video.thumbnail_url}" class="w-40 h-24 object-cover rounded-lg">` :
+                                                        `<div class="w-40 h-24 bg-gray-300 rounded-lg flex items-center justify-center">${icons.play}</div>`
+                                                    }
+                                                    <div class="absolute inset-0 flex items-center justify-center">
+                                                        <div class="bg-black bg-opacity-60 rounded-full p-3">
+                                                            <span class="w-8 h-8 text-white">${icons.play}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div class="flex-1">
+                                                    <div class="flex justify-between mb-2">
+                                                        <h3 class="font-bold text-lg">${vi+1}. ${video.title}</h3>
+                                                        ${badge}
+                                                    </div>
+                                                    <div class="flex gap-4 text-sm text-gray-600 mb-2">
+                                                        ${duration ? `<span class="flex items-center gap-1"><span class="w-4 h-4">${icons.clock}</span>${formatDuration(duration)}</span>` : ''}
+                                                        ${progress > 0 ? `<span class="text-blue-600">Last: ${formatDuration(progress)}</span>` : ''}
+                                                    </div>
+                                                    ${progress > 0 && duration > 0 ? `
+                                                        <div class="w-full bg-gray-200 rounded-full h-2">
+                                                            <div class="bg-blue-600 h-full rounded-full" style="width: ${progressPercent}%"></div>
+                                                        </div>
+                                                    ` : ''}
+                                                </div>
+                                            </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+            document.getElementById('app').innerHTML = html;
+        }
+
+        function renderPlayer(videoData) {
+            let playerHTML = '';
+            let badge = '';
+            
+            if (videoData.video_type === 'youtube') {
+                playerHTML = `<iframe src="${getYouTubeEmbedUrl(videoData.youtube_url, videoData.savedProgress || 0)}" 
+                    class="w-full h-full" frameborder="0" allowfullscreen></iframe>`;
+                badge = `<span class="bg-red-600 text-white px-4 py-2 rounded-full flex items-center gap-2">
+                    <span class="w-5 h-5">${icons.youtube}</span>YouTube</span>`;
+            } else if (videoData.video_type === 'hls') {
+                if (videoData.processing_status !== 'completed') {
+                    document.getElementById('app').innerHTML = `
+                        <div class="text-center py-20">
+                            <div class="bg-yellow-100 border-2 border-yellow-400 text-yellow-700 px-6 py-4 rounded-xl max-w-2xl mx-auto">
+                                <h3 class="font-bold text-xl mb-2">🎬 Video Processing</h3>
+                                <p>Your video is being converted to HLS format. This may take a few minutes.</p>
+                                <p class="text-sm mt-2">Status: ${videoData.processing_status}</p>
+                                <button onclick="loadChapters('${currentCourse}')" 
+                                    class="mt-4 bg-yellow-600 text-white px-6 py-2 rounded-lg">Back to Course</button>
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+                playerHTML = `<video id="videoPlayer" controls controlsList="nodownload" class="w-full h-full"></video>`;
+                badge = `<span class="bg-purple-600 text-white px-4 py-2 rounded-full flex items-center gap-2">
+                    <span class="w-5 h-5">${icons.hd}</span>HLS Streaming</span>`;
+            } else {
+                playerHTML = `<video id="videoPlayer" controls controlsList="nodownload" class="w-full h-full">
+                    <source src="${videoData.stream_url}" type="video/mp4"></video>`;
+                badge = `<span class="bg-blue-600 text-white px-4 py-2 rounded-full flex items-center gap-2">
+                    <span class="w-5 h-5">${icons.upload}</span>Standard</span>`;
+            }
+            
+            const html = `
+                <div class="fade-in">
+                    <button onclick="loadChapters('${currentCourse}')" 
+                            class="flex items-center gap-2 px-6 py-3 bg-gray-200 hover:bg-gray-300 rounded-lg mb-6">
+                        <span class="w-5 h-5">${icons.arrowLeft}</span>Back
+                    </button>
+                    <div class="bg-white rounded-xl shadow-2xl overflow-hidden">
+                        <div class="aspect-video bg-black relative">${playerHTML}</div>
+                        <div class="p-8">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-gray-500 mb-2">Now Playing</p>
+                                    <h2 class="text-3xl font-bold text-gray-800">Video Player</h2>
+                                </div>
+                                ${badge}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('app').innerHTML = html;
+            
+            if (videoData.video_type === 'hls') {
+                videoElement = document.getElementById('videoPlayer');
+                initHLSPlayer(videoElement, videoData.hls_url, videoData.savedProgress || 0);
+                videoElement.addEventListener('timeupdate', trackProgress);
+                videoElement.addEventListener('ended', () => {
+                    saveProgress(videoElement.duration, videoElement.duration);
+                });
+            } else if (videoData.video_type === 'uploaded') {
+                videoElement = document.getElementById('videoPlayer');
+                videoElement.addEventListener('loadedmetadata', () => {
+                    if (videoData.savedProgress > 0) {
+                        videoElement.currentTime = videoData.savedProgress;
+                    }
+                    videoElement.play();
+                });
+                videoElement.addEventListener('timeupdate', trackProgress);
+            }
+        }
+
+        function showLoading() {
+            document.getElementById('app').innerHTML = `
+                <div class="text-center py-20">
+                    <div class="inline-block animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mb-4"></div>
+                    <p class="text-xl text-gray-600 font-semibold">Loading...</p>
+                </div>
+            `;
+        }
+
+        function showError(message) {
+            document.getElementById('app').innerHTML = `
+                <div class="max-w-2xl mx-auto">
+                    <div class="bg-red-100 border-2 border-red-400 text-red-700 px-6 py-4 rounded-xl text-center">
+                        <h3 class="font-bold text-xl mb-2">⚠️ Error</h3>
+                        <p class="mb-4">${message}</p>
+                        <button onclick="loadCourses()" class="bg-red-600 text-white px-6 py-2 rounded-lg">Try Again</button>
+                    </div>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>
