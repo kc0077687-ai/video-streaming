@@ -47,16 +47,16 @@ class HLSProcessor:
 
         os.makedirs(output_dir, exist_ok=True)
 
-        # 1) Get video info
+        # Get video info
         video_info = self._get_video_info(input_video_path)
         source_height = video_info["height"]
 
-        # 2) Filter qualities
+        # Filter qualities
         available_qualities = self._filter_qualities(source_height, qualities)
 
         variant_playlists = []   # <-- FIX: define here
 
-        # 3) Generate HLS files for each quality
+        # Generate HLS files for each quality
         for quality in available_qualities:
             q_dir = os.path.join(output_dir, quality)
             os.makedirs(q_dir, exist_ok=True)
@@ -81,7 +81,7 @@ class HLSProcessor:
         if not variant_playlists:
             return {"success": False, "error": "No variants generated"}
 
-        # 4) Generate master playlist
+        # Generate master playlist
         try:
             master_playlist_path = self._generate_master_playlist(
                 output_dir,

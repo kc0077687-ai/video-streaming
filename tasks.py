@@ -55,7 +55,7 @@ def process_video_to_hls_task(video_id: str, video_object_name: str):
             video_id
         )
 
-        if not result.get("success"):
+        if not result.get("success"): 
             raise Exception(result.get("error"))
 
         # Upload HLS files to MinIO

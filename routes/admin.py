@@ -205,8 +205,8 @@ async def upload_file_stream(bucket_name: str, object_name: str,
             bucket_name=bucket_name,
             object_name=object_name,
             data=stream,
-            length=-1,                     # unknown size
-            part_size=5 * 1024 * 1024,     # REQUIRED
+            length=-1,                    
+            part_size=5 * 1024 * 1024,     
             content_type=upload_file.content_type or "video/mp4",
         )
 
@@ -220,7 +220,6 @@ async def upload_file_stream(bucket_name: str, object_name: str,
 
 @admin_router.post("/videos/upload")
 async def upload_video_with_hls(
-    
     chapter_id: str = Form(...),
     title: str = Form(...),
     description: Optional[str] = Form(None),
