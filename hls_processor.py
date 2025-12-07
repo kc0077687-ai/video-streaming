@@ -7,7 +7,9 @@ import subprocess
 import shutil
 from typing import List, Dict
 from pathlib import Path
+from db_clients import db
 import logging
+from bson import ObjectId
 import minio
 from config import settings, VIDEO_QUALITIES
 
@@ -78,6 +80,19 @@ class HLSProcessor:
                     "playlist_path": playlist_path
                 })
 
+                try:
+                    db.videos.update_one({"_id":ObjectId(video_id)},
+                                         {
+                                             "$addToSet":{"available_qualities":quality},
+                                             "$set":{"processing_status": "HLS Partial"}
+                                         }
+                    )
+                    logger.info(f"DB Updated: {quality} ready for {video_id}")
+                except Exception as e:
+                    logger.info(f"Failed to update DB for {quality}: {e}")
+
+                
+                
         if not variant_playlists:
             return {"success": False, "error": "No variants generated"}
 
@@ -94,6 +109,17 @@ class HLSProcessor:
                 "success": False,
                 "error": f"Failed to generate master playlist: {e}"
             }
+        
+        try:
+            db.videos.update_one(
+                {"_id":ObjectId(video_id)},
+                {"$set":{"processing_status":"HLS Completed"}}
+
+            )
+            logger.info(f"All qualiteis completed for video id {video_id}")
+
+        except Exception as e:
+            logger.info(f"Failed to finalize processing status for video is {video_id}")
 
         return {
             "success": True,

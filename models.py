@@ -68,6 +68,7 @@ class VideoResponse(BaseModel):
     thumbnail_url: Optional[str]
     hls_master_url: Optional[str] = None
     processing_status: Optional[str] = None  # 'pending', 'processing', 'completed', 'failed'
+    available_qualities: Optional[str]
     created_at: datetime
 
 

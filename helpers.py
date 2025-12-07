@@ -1,8 +1,9 @@
-
 from datetime import timedelta
 from minio.error import S3Error
 from fastapi import HTTPException
 from db_clients import minio_client
+from minio import Minio
+from config import settings
 
 def serialize_doc(doc):
     """Convert MongoDB document to JSON serializable format"""
@@ -34,3 +35,11 @@ def generate_presigned_url(bucket: str, object_name: str, expires: int = 3600) -
             status_code=500, 
             detail=f"Failed to generate URL: {str(e)}"
         )
+    
+
+def object_exists(bucket:str,object_name:str)->bool:
+    try:
+        minio_client.stat_object(bucket,object_name)
+        return True
+    except:
+        return False
